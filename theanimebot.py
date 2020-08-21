@@ -55,7 +55,7 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
             coverImage {
               large
             },
-            episodes, description(asHtml: true), meanScore, format, countryOfOrigin
+            episodes, description(asHtml: true), meanScore, format, countryOfOrigin, genres
         }
     }
 }'''
@@ -82,7 +82,7 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
 
         terms = event.pattern_match.group(1).split(': ', 1)
 
-        self.logger.debug('Inline query (offset=%s): %s', offset, terms)
+        self.logger.debug('Inline query %s (offset=%s): %s', event.id, offset, terms)
 
         if len(terms) == 2:
             tags_or_genres, search = terms
@@ -137,13 +137,14 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
                          (f"🇬🇧<b>{escape(english)}</b>\n" if english and english.lower() != title['romaji'].lower() else '') +
                          (f"{native_emoji}<b>{escape(native)}</b>\n" if native else '') +
                          f"\n<b>{result['format'].capitalize()}</b>: {result['episodes']} episodes \n"  # NB: \n at start is to separate titles
-                         f"<b>Score</b>: {result['meanScore']}\n"
+                         f"<b>Score</b>: {result['meanScore']}\n" +
+                         (f"<b>Genres</b>: {', '.join(result['genres'])}\n" if result['genres'] else '') +
                          f"<b>Description</b>:\n{d}"
                          f"\n\n{links}"
                 )
             )
 
-        self.logger.debug("Inline QUERY %d: Processed %d results", event.id, len(results))
+        self.logger.debug("Inline query %d: Processed %d results", event.id, len(results))
 
         try:
             await event.answer(results, next_offset=next_offset, cache_time=self.cache_time)
