@@ -100,10 +100,14 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
             'query': self.QUERY,
             'variables': {
                 'page': (offset // RESULTS_PER_QUERY) + 1, 'perPage': RESULTS_PER_QUERY,
-                'type': 'ANIME',
-                'search': search, 'genre_in': genres, 'tag_in': tags
+                'type': 'ANIME', 'search': search, 'genres': genres, 'tags': tags
             }
         }
+
+        for k, v in tuple(body['variables'].items()):
+            if not v:
+                body['variables'].pop(k)
+
         async with self.http.post(self.base_url, json=body) as resp:
             api_result = (await resp.json()) or {}
             api_result = (api_result.get('data') or {}).get('Page')
