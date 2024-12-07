@@ -55,7 +55,7 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
             coverImage {
               large
             },
-            episodes, description(asHtml: true), meanScore, format, countryOfOrigin, genres
+            episodes, seasonYear, description(asHtml: true), meanScore, format, countryOfOrigin, genres
         }
     }
 }'''
@@ -140,13 +140,15 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
                          f"<b>{escape(title['romaji'])}</b>\n" +
                          (f"🇬🇧<b>{escape(english)}</b>\n" if english and english.lower() != title['romaji'].lower() else '') +
                          (f"{native_emoji}<b>{escape(native)}</b>\n" if native else '') +
-                         f"\n<b>{result['format'].capitalize()}</b>: {result['episodes']} episodes \n"  # NB: \n at start is to separate titles
+                         f"\n<b>{result['format'].capitalize()}</b>: {result['episodes']} episodes (<b>aired</b>: {result['seasonYear']})\n"  # NB: \n at start is to separate titles
                          f"<b>Score</b>: {result['meanScore']}\n" +
                          (f"<b>Genres</b>: {', '.join(result['genres'])}\n" if result['genres'] else '') +
                          f"<b>Description</b>:\n{d}"
                          f"\n\n{links}"
                 )
             )
+        # protect against empty entities
+        results[-1].send_message.entities = list(filter(lambda x: x.length, results[-1].send_message.entities))
 
         self.logger.debug("Inline query %d: Processed %d results", event.id, len(results))
 
