@@ -1,12 +1,12 @@
-FROM python:3-alpine
+FROM ghcr.io/astral-sh/uv:python3.13-alpine
 
 WORKDIR /usr/src/app
 
 ENV DOCKER 1
 
-COPY requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock .
+RUN uv sync
 
 COPY . .
 
-CMD [ "python3", "./theanimebot.py" ]
+CMD [ "uv", "run", "theanimebot.py" ]

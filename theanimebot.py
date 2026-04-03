@@ -12,14 +12,16 @@ from functools import partial
 
 import aiohttp
 import telethon
+from pydantic import BaseModel, Field, ValidationError
 from telethon.tl.custom import Button
 from telethon.tl.custom.inlinebuilder import InlineBuilder
 from telethon.tl.types import InputWebDocument
 
+
 try:
     import ujson as json
 except ImportError:
-    import json
+    import json  # type: ignore
 
 escape = partial(escape, quote=False)
 
@@ -28,8 +30,36 @@ LOG_FILE = 'logs/bot.log'
 RESULTS_PER_QUERY = 10
 
 
+class CoverImage(BaseModel):
+    large: str
+
+
+class MediaTitle(BaseModel):
+    native: str | None
+    english: str | None
+    romaji: str | None
+
+
+class MediaResult(BaseModel):
+    title: MediaTitle
+    description: str | None
+
+    countryOfOrigin: str | None
+    coverImage: CoverImage
+    format: str | None
+
+    episodes: int | None
+    seasonYear: int | None
+    siteUrl: str
+    idMal: int | None
+
+    meanScore: int | None
+    genres: list[str] | None
+
+
+
 class Handler:
-    http: aiohttp.client.ClientSession = None
+    http: aiohttp.client.ClientSession = None  # type: ignore
     base_url = 'https://graphql.anilist.co'
     logger = logging.getLogger('handler')
     HTML_REGEX = re.compile(r'</?(p|br) ?/?>')
@@ -75,10 +105,62 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
         ]
         await event.answer(results, self.cache_time, switch_pm='Tap here for more help', switch_pm_param='help')
 
+    def _format_result(self, _result: dict, /) -> tuple[MediaResult, str] | tuple[None, None]:
+        try:
+            result = MediaResult.model_validate(_result)
+        except ValidationError as e:
+            self.logger.warning("Dropped bad item due to: %s", e)
+            self.logger.debug("Bad item: %s", _result)
+            return None, None
+        # manually unescape to avoid unexpected escapes
+        desc = self.HTML_REGEX.sub('', result.description or "Description not provided").replace('&quot;', '"')
+
+        title = result.title
+        # seemingly always provided:
+        native = title.native
+        english = title.english
+
+        title.romaji = title.romaji or ""
+        native_emoji = "🇯🇵" if result.countryOfOrigin == 'JP' else ''
+        img = result.coverImage.large
+
+        links = f"<a href='{result.siteUrl}'>AniList</a>"
+        if result.idMal:
+            links += f" | <a href='https://myanimelist.net/anime/{result.idMal}'>MAL</a>"
+
+        # Format stuff
+        result.format = result.format or "Unknown media type"
+
+        if '_' in result.format:
+            result.format = result.format.replace('_', ' ')
+        if result.format not in ('ONA', 'OVA'):
+            result.format = result.format.capitalize()
+
+        format_and_count = f"<b>{result.format}</b>"
+        if (result.episodes or 0) > 0:
+            format_and_count += f": {result.episodes} episodes"
+
+        # Finally:
+
+        text = (
+            f"<a href=\"{escape(img)}\">\u200d</a>"
+            f"<b>{escape(title.romaji)}</b>\n" +
+            (f"🇬🇧<b>{escape(english)}</b>\n" if english and english.lower() != title.romaji.lower() else '') +
+            (f"{native_emoji}<b>{escape(native)}</b>\n" if native else '') + "\n"
+            + format_and_count +
+            (f" ({result.seasonYear})" if result.seasonYear else "") + "\n"
+            f"<b>Score</b>: {result.meanScore or 'Unknown'}\n" +
+            (f"<b>Genres</b>: {', '.join(result.genres)}\n" if result.genres else '') +
+            f"<b>Description</b>:\n{desc}"
+            f"\n\n{links}"
+        )
+
+        return result, text
+
     @telethon.events.register(telethon.events.InlineQuery(pattern="(?i)(.+)"))
     async def inline_handler(self, event: telethon.events.InlineQuery.Event):
         offset = int(event.offset) if event.offset.isdigit() else 0
-        next_offset = str(offset + RESULTS_PER_QUERY)
+        next_offset: str | None = str(offset + RESULTS_PER_QUERY)
 
         terms = event.pattern_match.group(1).split(': ', 1)
 
@@ -96,7 +178,7 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
         if not genres and not tags:
             search = tags_or_genres.replace(',', ' ')  # none were found, use as search term
 
-        body = {
+        body: dict = {
             'query': self.QUERY,
             'variables': {
                 'page': (offset // RESULTS_PER_QUERY) + 1, 'perPage': RESULTS_PER_QUERY,
@@ -109,8 +191,8 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
                 body['variables'].pop(k)
 
         async with self.http.post(self.base_url, json=body) as resp:
-            api_result = (await resp.json()) or {}
-            api_result = (api_result.get('data') or {}).get('Page')
+            api_result: dict = (await resp.json()) or {}
+            api_result = (api_result.get('data') or {}).get('Page') or {}
 
         if not api_result:
             await event.answer()
@@ -119,32 +201,16 @@ query ($id: Int, $page: Int, $perPage: Int, $search: String, $genres: [String], 
             next_offset = None
 
         results = []
-        for i, result in enumerate(api_result.get('media', tuple())):
-            # manually unescape to avoid unexpected escapes
-            d = self.HTML_REGEX.sub('', result['description']).replace('&quot;', '"')
-
-            title = result['title']
-            native = title.get('native')
-            english = title.get('english')
-            native_emoji = "🇯🇵" if result['countryOfOrigin'] == 'JP' else ''
-            img = result['coverImage']['large']
-            links = f"<a href='{result['siteUrl']}'>AniList</a>"
-            if result['idMal']:
-                links += f" | <a href='https://myanimelist.net/anime/{result['idMal']}'>MAL</a>"
+        for i, _result in enumerate(api_result.get('media', ())):
+            result, text = self._format_result(_result)
+            if not (result and text):
+                continue
 
             results.append(
                 await self.builder.article(
-                    title['romaji'], id=str(i), parse_mode='html',
-                    thumb=InputWebDocument(img, 0, 'image/jpeg', []),
-                    text=f"<a href=\"{escape(img)}\">\u200d</a>"
-                         f"<b>{escape(title['romaji'])}</b>\n" +
-                         (f"🇬🇧<b>{escape(english)}</b>\n" if english and english.lower() != title['romaji'].lower() else '') +
-                         (f"{native_emoji}<b>{escape(native)}</b>\n" if native else '') +
-                         f"\n<b>{result['format'].capitalize()}</b>: {result['episodes']} episodes (<b>aired</b>: {result['seasonYear']})\n"  # NB: \n at start is to separate titles
-                         f"<b>Score</b>: {result['meanScore']}\n" +
-                         (f"<b>Genres</b>: {', '.join(result['genres'])}\n" if result['genres'] else '') +
-                         f"<b>Description</b>:\n{d}"
-                         f"\n\n{links}"
+                    result.title.romaji, id=str(i), parse_mode='html',
+                    thumb=InputWebDocument(result.coverImage.large, 0, 'image/jpeg', []),
+                    text=text
                 )
             )
         # protect against empty entities
@@ -237,7 +303,7 @@ def setup():
 
     logger = logging.getLogger()
     level = getattr(logging, config['main']['logging level'], logging.INFO)
-    formatter = logging.Formatter("%(asctime)s\t%(levelname)s:%(message)s")
+    formatter = logging.Formatter("%(asctime)s\t%(levelname)-5s\t%(name)s:%(message)s")
     logger.setLevel(level)
 
     if not os.path.exists('logs'):
@@ -249,6 +315,8 @@ def setup():
     for h in logger.handlers:
         h.setFormatter(formatter)
         h.setLevel(level)
+
+    logging.getLogger('telethon').setLevel(logging.WARNING)
 
     bot = telethon.TelegramClient(config['TG API']['session'],
                                   config['TG API'].getint('api_id'), config['TG API']['api_hash'],

@@ -1,0 +1,20 @@
+[project]
+name = "theanimebot"
+version = "0.1.0"
+description = "An inline Telegram bot to query AniList for anime info"
+readme = "README.md"
+
+requires-python = ">=3.7"
+
+dependencies = [
+    "aiohttp<4",
+    "pydantic>=2.5.3",
+    "telethon>=1.5,<2.0",
+    "ujson<6",
+]
+
+[dependency-groups]
+lsp = [
+    "pylsp-mypy>=0.6.7",
+    "python-lsp-server>=1.7.4",
+]
